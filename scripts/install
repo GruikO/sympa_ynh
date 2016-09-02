@@ -1,92 +1,121 @@
 #!/bin/bash
 
-# Exit on command errors and treat unset variables as an error
-set -eu
+source .fonctions	# Charge les fonctions génériques habituellement utilisées dans le script
 
-# This is a multi-instance app, meaning it can be installed several times independently
-# The id of the app as stated in the manifest is available as $YNH_APP_ID
-# The instance number is available as $YNH_APP_INSTANCE_NUMBER (equals "1", "2", ...)
-# The app instance name is available as $YNH_APP_INSTANCE_NAME
-#    - the first time the app is installed, YNH_APP_INSTANCE_NAME = ynhexample
-#    - the second time the app is installed, YNH_APP_INSTANCE_NAME = ynhexample__2
-#    - ynhexample__{N} for the subsequent installations, with N=3,4, ...
-# The app instance name is probably what you are interested the most, since this is
-# guaranteed to be unique. This is a good unique identifier to define installation path,
-# db names, ...
-app=$YNH_APP_INSTANCE_NAME
+CLEAN_SETUP () {
+# Nettoyage des résidus d'installation non pris en charge par le script remove.
+# Pas de nettoyage supplémentaire nécessaire ici...
+	echo ""
+}
+TRAP_ON	# Active trap pour arrêter le script si une erreur est détectée.
 
 # Retrieve arguments
 domain=$YNH_APP_ARG_DOMAIN
 path=$YNH_APP_ARG_PATH
-admin=$YNH_APP_ARG_ADMIN
-is_public=$YNH_APP_ARG_IS_PUBLIC
+admin_wordpress=$YNH_APP_ARG_ADMIN
 language=$YNH_APP_ARG_LANGUAGE
+multisite=$YNH_APP_ARG_MULTISITE
+is_public=$YNH_APP_ARG_IS_PUBLIC
 
-# Source YunoHost helpers
+app=$YNH_APP_INSTANCE_NAME
+
+# Source app helpers
 source /usr/share/yunohost/helpers
 
-# Save app settings
-ynh_app_setting_set "$app" admin "$admin"
-ynh_app_setting_set "$app" is_public "$is_public"
-ynh_app_setting_set "$app" language "$language"
+# Vérifie que les variables ne sont pas vides.
+CHECK_VAR "$app" "app name not set"
 
-# Check domain/path availability
-sudo yunohost app checkurl "${domain}${path}" -a "$app" \
-    || ynh_die "Path not available: ${domain}${path}"
 
-# Copy source files
-src_path=/var/www/$app
-sudo mkdir -p $src_path
-sudo cp -a ../sources/. $src_path
+CHECK_USER "$admin_sympa"	# Vérifie la validité de l'user admin
 
-# Set permissions to app files
-# you may need to make some file and/or directory writeable by www-data (nginx user)
-sudo chown -R root: $src_path
+CHECK_PATH	# Vérifie et corrige la syntaxe du path.
+CHECK_DOMAINPATH	# Vérifie la disponibilité du path et du domaine.
 
-### MySQL (can be removed if not used) ###
-# If your app use a MySQL database you can use these lines to bootstrap
-# a database, an associated user and save the password in app settings.
-#
-# # Generate MySQL password and create database
-# dbuser=$app
-# dbname=$app
-# dbpass=$(ynh_string_random 12)
-# ynh_app_setting_set "$app" mysqlpwd "$dbpass"
-# ynh_mysql_create_db "$dbname" "$dbuser" "$dbpass"
-#
-# # Load initial SQL into the new database
-# ynh_mysql_connect_as "$dbuser" "$dbpass" "$dbname" \
-#     < "../sources/sql/mysql.init.sql"
-### MySQL end ###
+CHECK_FINALPATH	# Vérifie que le dossier de destination n'est pas déjà utilisé.
 
-# Modify Nginx configuration file and copy it to Nginx conf directory
-nginx_conf=../conf/nginx.conf
-sed -i "s@YNH_WWW_PATH@$path@g" $nginx_conf
-sed -i "s@YNH_WWW_ALIAS@$src_path/@g" $nginx_conf
-# If a dedicated php-fpm process is used:
-# Don't forget to modify ../conf/nginx.conf accordingly or your app will not work!
-# sed -i "s@YNH_WWW_APP@$app@g" $nginx_conf
-sudo cp $nginx_conf /etc/nginx/conf.d/$domain.d/$app.conf
-
-### PHP (can be removed if not used) ###
-# If a dedicated php-fpm process is used:
-# Don't forget to modify ../conf/php-fpm.conf accordingly or your app will not work!
-#
-# # Modify PHP-FPM pool configuration and copy it to the pool directory
-# sed -i "s@YNH_WWW_APP@$app@g" ../conf/php-fpm.conf
-# sed -i "s@YNH_WWW_ALIAS@$src_path/@g" ../conf/php-fpm.conf
-# finalphpconf=/etc/php5/fpm/pool.d/$app.conf
-# sudo cp ../conf/php-fpm.conf $finalphpconf
-# sudo chown root: $finalphpconf
-# sudo chmod 644 $finalphpconf
-# sudo service php5-fpm reload
-### PHP end ###
-
-# If app is public, add url to SSOWat conf as skipped_uris
-if [[ $is_public -eq 1 ]]; then
-  # unprotected_uris allows SSO credentials to be passed anyway.
-  ynh_app_setting_set "$app" unprotected_uris "/"
+if [ "$path" == "/" ] && [ "$multisite" = "Yes" ]; then
+    echo "Multisite option of wordpress doesn't work at root of domain." >&2
+	false
 fi
 
-# Reload services
+# Enregistre les infos dans la config YunoHost
+sudo yunohost app setting $app domain -v $domain
+sudo yunohost app setting $app path -v $path
+sudo yunohost app setting $app admin -v $admin_wordpress
+sudo yunohost app setting $app is_public -v $is_public
+sudo yunohost app setting $app language -v $language
+sudo yunohost app setting $app multisite -v $multisite
+
+GENERATE_DB $app	# Créer une base de données et un utilisateur dédié au nom de l'app.
+
+
+# Crée le repertoire de destination et stocke son emplacement.
+sudo mkdir "$final_path"
+sudo yunohost app setting $app final_path -v $final_path
+
+
+SETUP_SOURCE "sympa.tar.gz"	# Télécharge la source, décompresse et copie dans $final_path
+
+# Et copie le fichier de config nginx
+sudo cp ../conf/nginx.conf /etc/nginx/conf.d/$domain.d/$app.conf
+
+# TODO : from here to the end !
+
+# Modifie les variables dans le fichier de configuration nginx
+#sudo sed -i "s@__PATHTOCHANGE__@$path@g" /etc/nginx/conf.d/$domain.d/$app.conf
+#sudo sed -i "s@__FINALPATH__@$final_path@g" /etc/nginx/conf.d/$domain.d/$app.conf
+#sudo sed -i "s@__NAMETOCHANGE__@$app@g" /etc/nginx/conf.d/$domain.d/$app.conf
+
+#POOL_FPM	# Créer le fichier de configuration du pool php-fpm et le configure.
+
+
+#sudo cp ../conf/wp-config.php $final_path/wp-config.php
+
+# Change variables in Wordpress configuration
+#sudo sed -i "s/__DB_USER__/$db_user/g" $final_path/wp-config.php
+#sudo sed -i "s/__DB_PWD__/$db_pwd/g" $final_path/wp-config.php
+#sudo sed -i "s/__DOMAIN__/$domain/g" $final_path/wp-config.php
+#sudo sed -i "s@__PATH__@$path@g" $final_path/wp-config.php
+
+
+#for i in 1 2 3 4 5 6 7 8
+#do
+#    j=$(dd if=/dev/urandom bs=1 count=200 2> /dev/null | tr -c -d '[A-Za-z0-9]' | sed -n 's/\(.\{40\}\).*/\1/p')
+#    if [ "$j" = "" ];
+#    then
+#        # For obscure reasons, the loop is too fast at execution
+#        sleep 1
+#        j=$(dd if=/dev/urandom bs=1 count=200 2> /dev/null | tr -c -d '[A-Za-z0-9]' | sed -n 's/\(.\{40\}\).*/\1/p')
+#    fi
+#    sudo sed -i "s/KEY$i/$j/g" $final_path/wp-config.php
+#done
+
+# Set permissions to wordpress directory
+sudo chown -R www-data: $final_path
+
+# Donne un accès public pour curl
+sudo yunohost app setting $app unprotected_uris -v "/"
+# Recharge la configuration Nginx
 sudo service nginx reload
+# Régénère la configuration de SSOwat
+sudo yunohost app ssowatconf
+
+# TODO install sympa
+
+# Configure les droits d'accès au fichiers
+# Les fichiers appartiennent à www-data, pour permettre les mises à jour.
+sudo chown -R www-data: $final_path
+# Sauf le fichier de config wp-config.php qui appartient à root
+#sudo chown root: $final_path/wp-config.php
+
+if [ "$is_public" = "No" ];
+then
+	# Retire l'accès public
+	sudo yunohost app setting $app unprotected_uris -d
+	sudo yunohost app ssowatconf
+fi
+
+sudo service nginx reload
+
+# wp-cli me semble un peu trop permissif... Il a terminé son travail...
+#sudo rm -f $final_path/wp-cli.phar
