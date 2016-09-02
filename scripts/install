@@ -12,7 +12,7 @@ TRAP_ON	# Active trap pour arrêter le script si une erreur est détectée.
 # Retrieve arguments
 domain=$YNH_APP_ARG_DOMAIN
 path=$YNH_APP_ARG_PATH
-admin_wordpress=$YNH_APP_ARG_ADMIN
+admin=$YNH_APP_ARG_ADMIN
 language=$YNH_APP_ARG_LANGUAGE
 multisite=$YNH_APP_ARG_MULTISITE
 is_public=$YNH_APP_ARG_IS_PUBLIC
@@ -26,7 +26,7 @@ source /usr/share/yunohost/helpers
 CHECK_VAR "$app" "app name not set"
 
 
-CHECK_USER "$admin_sympa"	# Vérifie la validité de l'user admin
+CHECK_USER "$admin"	# Vérifie la validité de l'user admin
 
 CHECK_PATH	# Vérifie et corrige la syntaxe du path.
 CHECK_DOMAINPATH	# Vérifie la disponibilité du path et du domaine.
