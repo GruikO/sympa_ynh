@@ -77,7 +77,7 @@
 		},
 		"choices": ["Yes", "No"],
 		"default": "No"
-	},
+	}
         ]
     }
 }
